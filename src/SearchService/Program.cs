@@ -1,7 +1,8 @@
 using MassTransit;
-using AuctionService.Data;
-using Microsoft.EntityFrameworkCore;
-using Contracts;
+using MongoDB.Driver;
+using MongoDB.Entities;
+using SearchService;
+using SearchService.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,24 +10,22 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 
-builder.Services.AddDbContext<AuctionDbContext>(opt =>
-{
-    opt.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"));
-});
-
 builder.Services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
 
 builder.Services.AddMassTransit(x =>
 {
-    x.AddEntityFrameworkOutbox<AuctionDbContext>(o =>
-    {
-        o.QueryDelay = TimeSpan.FromSeconds(10);
-        o.UsePostgres();
-        o.UseBusOutbox();
-    });
+    x.AddConsumersFromNamespaceContaining<AuctionCreatedConsumer>();
+
+    x.SetEndpointNameFormatter(new KebabCaseEndpointNameFormatter("search", false));
 
     x.UsingRabbitMq((context, cfg) =>
     {
+        cfg.ReceiveEndpoint("search-auction-created", e =>
+        {
+            e.UseMessageRetry(r => r.Interval(5, 5));
+            e.ConfigureConsumer<AuctionCreatedConsumer>(context);
+        });
+
         cfg.ConfigureEndpoints(context);
     });
 });
@@ -36,10 +35,9 @@ var app = builder.Build();
 app.UseAuthorization();
 
 app.MapControllers();
-
 try
 {
-    DbInitializer.InitDb(app);
+    await DbInitializer.InitDb(app);
 }
 catch (Exception e)
 {
